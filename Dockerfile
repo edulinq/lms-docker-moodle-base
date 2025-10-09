@@ -4,13 +4,15 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 ENV MOODLE_DB_NAME=moodle
 ENV MOODLE_DB_USER=moodleuser
-ENV MOODLE_DB_PASSWORD=moodlepass
+ENV MOODLE_DB_PASS=moodlepass
 
 ENV MOODLE_ADMIN_USER=server-owner
-ENV MOODLE_ADMIN_PASSWORD=server-owner
+ENV MOODLE_ADMIN_PASS=server-owner
 ENV MOODLE_ADMIN_EMAIL=server-owner@test.edulinq.org
 
 ENV MOODLE_VERSION=v5.0.1
+
+ARG MOODLE_PORT=4000
 
 USER root
 
@@ -49,27 +51,56 @@ RUN \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /var/www/html
-
-# Clone Moodle Repo
+# Clone Moodle repo in the web root and checkout the correct version.
 RUN \
-    git clone https://github.com/moodle/moodle.git \
-    && cd moodle \
-    && git checkout $MOODLE_VERSION
+    rm -rf /var/www/html \
+    && git clone https://github.com/moodle/moodle.git /var/www/html \
+    && cd /var/www/html \
+    && git checkout $MOODLE_VERSION \
+    && rm -rf .git
 
-# Setup Permissions
+# Set Moodle Port
+RUN sed -i "s/:80/:$MOODLE_PORT/" /etc/apache2/sites-available/000-default.conf
+RUN sed -i "s/Listen 80/Listen $MOODLE_PORT/" /etc/apache2/ports.conf
+
+# Setup Web Permissions
 RUN \
-    mkdir -p /var/www/moodledata /var/www/html/moodle \
-    && chown -R www-data:www-data /var/www/moodledata \
-    && chown -R www-data:www-data /var/www/html/moodle
+    mkdir -p /work/moodledata \
+    && chown -R www-data:www-data /work/moodledata /var/www/html
 
-# Max Input Vars 5000
-COPY moodle-custom.ini /etc/php/8.3/apache2/conf.d/99-moodle.ini
-COPY moodle-custom.ini /etc/php/8.3/cli/conf.d/99-moodle.ini
+# Set PHP Configs
+COPY config/moodle-custom.ini /etc/php/8.3/apache2/conf.d/99-moodle.ini
+COPY config/moodle-custom.ini /etc/php/8.3/cli/conf.d/99-moodle.ini
 
-# Initialize Moodle
-COPY scripts/initialize.sh /work
-RUN /work/initialize.sh
+# Setup Database and Moodle
+RUN \
+    # Start the DB in the background. \
+    mysqld_safe --nowatch \
+    # Wait for the DB to be ready. \
+    && (until mysqladmin ping --silent; do echo "Waiting for database server to start..." ; sleep 2 ; done) \
+    # Create the DB. \
+    && mysql -u root -e "CREATE DATABASE IF NOT EXISTS ${MOODLE_DB_NAME} DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" \
+    && mysql -u root -e "CREATE USER IF NOT EXISTS '${MOODLE_DB_USER}'@'localhost' IDENTIFIED BY '${MOODLE_DB_PASS}';" \
+    && mysql -u root -e "GRANT ALL PRIVILEGES ON ${MOODLE_DB_NAME}.* TO '${MOODLE_DB_USER}'@'localhost';" \
+    && mysql -u root -e "FLUSH PRIVILEGES;" \
+    && sudo -u www-data /usr/bin/php /var/www/html/admin/cli/install.php \
+        --non-interactive \
+        --lang=en \
+        --wwwroot=http://localhost:$MOODLE_PORT \
+        --dataroot=/work/moodledata \
+        --dbtype=mariadb \
+        --dbhost=localhost \
+        --dbname=$MOODLE_DB_NAME \
+        --dbuser=$MOODLE_DB_USER \
+        --dbpass=$MOODLE_DB_PASS \
+        --fullname="EduLinq LMS Docker Moodle" \
+        --shortname="EDQ Moodle" \
+        --adminuser=$MOODLE_ADMIN_USER \
+        --adminpass=$MOODLE_ADMIN_PASS \
+        --adminemail=$MOODLE_ADMIN_EMAIL \
+        --agree-license \
+    # Stop the DB. \
+    && mysqladmin shutdown
 
 COPY scripts/entrypoint.sh /work
 ENTRYPOINT ["/work/entrypoint.sh"]
