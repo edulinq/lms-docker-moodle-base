@@ -24,10 +24,10 @@ Once built, the container can be run using standard options.
 This image uses port 4000 by default, so that port should be passed through:
 ```sh
 # Using the previously built image.
-docker run --rm -it -p 4000:4080 --name moodle lms-docker-moodle-base
+docker run --rm -it -p 4000:4000 --name moodle lms-docker-moodle-base
 
 # Using the pre-built image.
-docker run --rm -it -p 4000:4080 --name moodle ghcr.io/edulinq/lms-docker-moodle-base
+docker run --rm -it -p 4000:4000 --name moodle ghcr.io/edulinq/lms-docker-moodle-base
 ```
 
 Moodle is very sensitive to the port used (even if you map a different port in Docker).
